@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Ultimate Sports Dashboard</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chart.js"/>
+<style>
+:root {--bg:#121212;--text:#fff;--card-bg:#222;--border:#444;}
+body {margin:0;padding:0;font-family:Arial,sans-serif;background:var(--bg);color:var(--text);}
+h1 {text-align:center;color:#ffcc00;margin:20px 0;}
+#filters {display:flex;flex-wrap:wrap;gap:10px;justify-content:center;padding:10px;position:sticky;top:0;background:var(--bg);z-index:10;}
+#filters input,#filters select,#filters button{padding:5px 8px;border-radius:4px;border:1px solid var(--border);background:var(--card-bg);color:var(--text);}
+#filters button{cursor:pointer;background:#ffcc00;color:#121212;font-weight:bold;border:none;}
+#dashboard{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:10px;padding:10px;height:calc(100vh - 80px);}
+.quadrant{background:var(--card-bg);border-radius:8px;overflow-y:auto;display:flex;flex-direction:column;}
+.quadrant-header{display:flex;align-items:center;padding:10px;font-weight:bold;font-size:1.2em;border-bottom:1px solid var(--border);}
+.quadrant-header img{width:30px;height:30px;margin-right:8px;border-radius:50%;}
+.game-card{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;margin:5px;border-radius:6px;cursor:pointer;transition:background 0.3s;}
+.game-card:hover{background:#333;}
+.game-card.live{animation:pulse 1.5s infinite;border-left:5px solid #4CAF50;}
+@keyframes pulse{0%{box-shadow:0 0 5px #4CAF50;}50%{box-shadow:0 0 15px #4CAF50;}100%{box-shadow:0 0 5px #4CAF50;}}
+.score.flash{color:#ff0 !important;transition:color 0.5s;}
+table{width:100%;border-collapse:collapse;margin-top:5px;}
+th,td{padding:4px 6px;border-bottom:1px solid var(--border);}
+th{background:#333;color:#ffcc00;}
+td.points.flash{color:#ff0;}
+.leaderboard{background:#1a1a1a;padding:5px;margin:5px;border-radius:6px;max-height:150px;overflow-y:auto;}
+.dark{--bg:#f0f0f0;--text:#121212;--card-bg:#fff;--border:#ccc;}
+@media(max-width:800px){#dashboard{grid-template-columns:1fr;grid-template-rows:repeat(4,1fr);height:auto;}}
+</style>
+</head>
+<body>
+
+<h1>Ultimate Sports Dashboard</h1>
+
+<div id="filters">
+  <input type="text" id="team-search" placeholder="Team name">
+  <input type="text" id="player-search" placeholder="Player name">
+  <select id="status-filter">
+    <option value="all">All</option>
+    <option value="live">Live</option>
+    <option value="scheduled">Scheduled</option>
+    <option value="finished">Finished</option>
+  </select>
+  <button id="reset-filters">Reset Filters</button>
+  <button id="theme-toggle">Toggle Dark/Light</button>
+</div>
+
+<div id="dashboard">
+  <div class="quadrant" id="mlb-quadrant"><div class="quadrant-header"><img src="https://upload.wikimedia.org/wikipedia/en/1/1c/MLB_logo.svg">MLB</div><div id="mlb-games"></div></div>
+  <div class="quadrant" id="nfl-quadrant"><div class="quadrant-header"><img src="https://upload.wikimedia.org/wikipedia/en/a/a2/NFL_logo.svg">NFL</div><div id="nfl-games"></div></div>
+  <div class="quadrant" id="nba-quadrant"><div class="quadrant-header"><img src="https://upload.wikimedia.org/wikipedia/en/0/03/NBA_logo.svg">NBA</div><div id="nba-games"></div></div>
+  <div class="quadrant" id="nhl-quadrant"><div class="quadrant-header"><img src="https://upload.wikimedia.org/wikipedia/en/3/3a/NHL_logo.svg">NHL</div><div id="nhl-games"></div></div>
+</div>
+
+<div class="leaderboard" id="leaderboard"><strong>Top Players</strong><div id="leaderboard-content">Loading...</div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+let favorites=JSON.parse(localStorage.getItem("favorites")||"[]");
+let expandedGames={},darkMode=false;
+
+const API={
+  mlb:"https://statsapi.mlb.com/api/v1/schedule?sportId=1",
+  nfl:"http://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard",
+  nba:"https://www.balldontlie.io/api/v1/games?per_page=12",
+  nhl:"https://statsapi.web.nhl.com/api/v1/schedule"
+};
+
+async function fetchJSON(url){return fetch(url).then(r=>r.json());}
+function getStatusClass(status){status=status.toLowerCase(); if(status.includes("final"))return"finished"; if(status.includes("progress")||status.includes("live"))return"live"; return"scheduled";}
+function flashScore(el){el.classList.add("flash"); setTimeout(()=>el.classList.remove("flash"),500);}
+function toggleFavorite(team){if(favorites.includes(team)) favorites=favorites.filter(f=>f!==team); else favorites.push(team); localStorage.setItem("favorites",JSON.stringify(favorites)); applyFavoritesHighlight();}
+function applyFavoritesHighlight(){["mlb","nfl","nba","nhl"].forEach(l=>{const div=document.getElementById(l+"-games"); Array.from(div.children).forEach(card=>{let txt=card.textContent.toLowerCase(); let isFav=favorites.some(f=>txt.includes(f.toLowerCase())); card.style.border=isFav?"2px solid #ffcc00":"";});});}
+
+// Player stats placeholders
+async function fetchMLBPlayers(gameId){return [{name:"MLB Player1",position:"C",team:"MLB",points:Math.floor(Math.random()*5)}];}
+async function fetchNBAPlayers(gameId){return [{name:"NBA Player1",position:"G",team:"NBA",points:Math.floor(Math.random()*30)}];}
+async function fetchDummyPlayers(league,gameId){return [{name:"Player1",position:"F",team:league.toUpperCase(),points:Math.floor(Math.random()*30)}];}
+
+function expandGameCard(card, league, gameId){
+  if(expandedGames[gameId]){card.removeChild(expandedGames[gameId]); delete expandedGames[gameId]; return;}
+  const detailDiv=document.createElement("div"); detailDiv.style.background="#333"; detailDiv.style.padding="5px"; detailDiv.style.marginTop="5px"; detailDiv.style.borderRadius="5px"; detailDiv.textContent="Loading player stats..."; card.appendChild(detailDiv); expandedGames[gameId]=detailDiv;
+  let fetchFn=(league==="mlb"?fetchMLBPlayers:(league==="nba"?fetchNBAPlayers:()=>fetchDummyPlayers(league,gameId)));
+  fetchFn(gameId).then(players=>{
+    detailDiv.innerHTML="";
+    const table=document.createElement("table");
+    table.innerHTML="<tr><th>Name</th><th>Position</th><th>Team</th><th>Points</th></tr>";
+    players.forEach(p=>{
+      const row=document.createElement("tr"); row.innerHTML=`<td>${p.name}</td><td>${p.position}</td><td>${p.team}</td><td class="points">${p.points}</td>`;
+      if(p.points>0) row.querySelector(".points").classList.add("flash");
+      table.appendChild(row);
+    });
+    detailDiv.appendChild(table);
+  });
+}
+
+function createGameCard(game, league){
+  const card=document.createElement("div"); card.className="game-card"; 
+  const statusClass=getStatusClass(game.status||game.statusText||""); 
+  if(statusClass==="live") card.classList.add("live");
+  const away=game.away_team||game.visitorTeam||{name:"Away",score:0,id:Math.random()};
+  const home=game.home_team||game.homeTeam||{name:"Home",score:0,id:Math.random()};
+  const scoreEl=document.createElement("div"); scoreEl.textContent=(away?.score||0)+"-"+(home?.score||0); scoreEl.className="score";
+  const mainDiv=document.createElement("div"); mainDiv.style.flex="1"; mainDiv.textContent=(away?.name||"Away")+" vs "+(home?.name||"Home")+" "; mainDiv.appendChild(scoreEl);
+  card.appendChild(mainDiv);
+  const favBtn=document.createElement("button"); favBtn.textContent="⭐"; favBtn.style.marginLeft="5px"; favBtn.onclick=(e)=>{e.stopPropagation(); toggleFavorite(away?.name||away?.abbreviation);};
+  card.appendChild(favBtn);
+  card.onclick=()=>expandGameCard(card,league,away?.id||home?.id);
+  return card;
+}
+
+async function loadGames(league){
+  try{
+    const json=await fetchJSON(API[league]); 
+    let data=[]; 
+    if(league==="mlb") data=json.dates?.[0]?.games||[];
+    if(league==="nba") data=json.data||[];
+    if(league==="nfl") data=json.events||[];
+    if(league==="nhl") data=json.dates?.[0]?.games||[];
+    const div=document.getElementById(league+"-games"); div.innerHTML="";
+    data.forEach(g=>{div.appendChild(createGameCard(g,league));});
+  }catch(e){console.error(e);}
+}
+
+// Filters
+function applyFilters(){
+  const teamFilter=document.getElementById("team-search").value.toLowerCase();
+  const playerFilter=document.getElementById("player-search").value.toLowerCase();
+  const statusFilter=document.getElementById("status-filter").value;
+  ["mlb","nfl","nba","nhl"].forEach(l=>{
+    const div=document.getElementById(l+"-games");
+    Array.from(div.children).forEach(card=>{
+      let txt=card.textContent.toLowerCase();
+      let show=true;
+      if(teamFilter && !txt.includes(teamFilter)) show=false;
+      if(playerFilter && !txt.includes(playerFilter)) show=false;
+      if(statusFilter!=="all" && !card.className.includes(statusFilter)) show=false;
+      card.style.display=show?"flex":"none";
+    });
+  });
+}
+
+// Event listeners
+document.getElementById("team-search").addEventListener("input",applyFilters);
+document.getElementById("player-search").addEventListener("input",applyFilters);
+document.getElementById("status-filter").addEventListener("change",applyFilters);
+document.getElementById("reset-filters").addEventListener("click",()=>{
+  document.getElementById("team-search").value="";
+  document.getElementById("player-search").value="";
+  document.getElementById("status-filter").value="all";
+  applyFilters();
+});
+document.get
